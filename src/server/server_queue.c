@@ -2,9 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include "utils.h"
-#include "queue.h"
-#include "protocol.h"
+#include "../utils.h"
+#include "../queue.h"
+#include "../protocol.h"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -144,7 +144,17 @@ int main(int argc, char *argv[]) {
     }
     for (long long i = 0; i < num_ids; ++i) {
         ids[i] = i + 1;
+        // Mostra progresso a cada 1% ou a cada 1 milhão, o que for menor
+        long long step = num_ids / 100;
+        if (step < 1000000) step = 1000000;
+        if ((i+1) % step == 0 || i == num_ids - 1) {
+            double percent = 100.0 * (i+1) / num_ids;
+            if (percent > 100.0) percent = 100.0;
+            printf("[SERVER] Criando IDs: %.1f%% (%lld/%lld)\r", percent, i+1, num_ids);
+            fflush(stdout);
+        }
     }
+    printf("\n");
 
     printf("[SERVER] Shuffling IDs...\n");
     shuffle(ids, num_ids);

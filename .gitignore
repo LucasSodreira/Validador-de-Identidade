@@ -1,0 +1,25 @@
+# Ignora arquivos binários e objetos
+bin/
+*.o
+*.exe
+
+# Ignora arquivos de dependências e build
+*.obj
+*.dll
+*.lib
+*.pdb
+*.ilk
+*.exp
+*.log
+
+# Ignora arquivos temporários do sistema
+*.tmp
+*.temp
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Ignora arquivos de configuração do editor
+.vscode/
+*.code-workspace

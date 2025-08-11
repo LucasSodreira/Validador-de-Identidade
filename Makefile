@@ -13,7 +13,7 @@ LDFLAGS = -lm -lws2_32
 
 # Diretórios
 SRC_DIR = src
-INC_DIR = include .
+INC_DIR = include . src
 INCLUDES = $(addprefix -I, $(INC_DIR))
 BIN_DIR = bin
 
