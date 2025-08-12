@@ -2,9 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include "../utils.h"
-#include "../queue.h"
-#include "../protocol.h"
+#include "utils.h"
+#include "queue.h"
+#include "protocol.h"
 
 #ifdef _WIN32
 #include <winsock2.h>

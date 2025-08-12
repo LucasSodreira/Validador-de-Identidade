@@ -2,9 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include "../utils.h"
-#include "../stack.h"
-#include "../protocol.h"
+#include "utils.h"
+#include "stack.h"
+#include "protocol.h"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -45,7 +45,47 @@ while (1) {
     }
         buffer[read_size] = '\0';
 
-        if (strcmp(buffer, "GET") == 0) {
+        if (strncmp(buffer, "GETB", 4) == 0) {
+            // Formato: GETB <n>
+            long req = 0;
+            char *p = buffer + 4;
+            while (*p == ' ') p++;
+            if (*p) req = strtoll(p, NULL, 10);
+            if (req <= 0) req = 1;
+            if (req > 1024) req = 1024; // limite de segurança
+
+            id_t ids_local[1024];
+            int count = 0;
+#ifdef _WIN32
+            WaitForSingleObject(stack_mutex, INFINITE);
+#else
+            pthread_mutex_lock(&stack_mutex);
+#endif
+            while (count < req) {
+                id_t tmp;
+                if (!stack_pop(id_stack, &tmp)) break;
+                ids_local[count++] = tmp;
+            }
+#ifdef _WIN32
+            ReleaseMutex(stack_mutex);
+#else
+            pthread_mutex_unlock(&stack_mutex);
+#endif
+            if (count == 0) {
+                send(client_socket, "EMPTY", 5, 0);
+                break;
+            } else {
+                char outbuf[8192];
+                int offset = snprintf(outbuf, sizeof(outbuf), "%d", count);
+                for (int i = 0; i < count && offset < (int)sizeof(outbuf); ++i) {
+                    offset += snprintf(outbuf + offset, sizeof(outbuf) - offset, " %lld", (long long)ids_local[i]);
+                }
+                if (offset < (int)sizeof(outbuf) - 2) {
+                    outbuf[offset++] = '\n';
+                }
+                send(client_socket, outbuf, offset, 0);
+            }
+        } else if (strcmp(buffer, "GET") == 0) {
 #ifdef _WIN32
             WaitForSingleObject(stack_mutex, INFINITE);
 #else

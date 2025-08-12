@@ -2,9 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include "../utils.h"
-#include "../linked_list.h"
-#include "../protocol.h"
+#include "utils.h"
+#include "linked_list.h"
+#include "protocol.h"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -18,6 +18,8 @@
 #endif
 
 #define MAX_CLIENTS 10
+#define SOCKET_BUFFER_SIZE (1 << 20)  // 1 MiB buffer
+#define MAX_BATCH_SIZE 4096           // Increased batch size for better performance
 
 LinkedList* id_list = NULL;
 
@@ -44,8 +46,54 @@ void* handle_client(void* client_socket_ptr) {
             break;
         }
         buffer[read_size] = '\0';
+        
+        // Normalize CRLF for robust parsing
+        char *cr = strchr(buffer, '\r'); 
+        if (cr) *cr = '\0';
+        char *lf = strchr(buffer, '\n'); 
+        if (lf) *lf = '\0';
 
-        if (strcmp(buffer, "GET") == 0) {
+        if (strncmp(buffer, "GETB", 4) == 0) {
+            // Format: GETB <n>
+            long req = 0;
+            char *p = buffer + 4;
+            while (*p == ' ') p++;
+            if (*p) req = strtoll(p, NULL, 10);
+            if (req <= 0) req = 1;
+            if (req > MAX_BATCH_SIZE) req = MAX_BATCH_SIZE; // Increased limit
+
+            id_t ids_local[MAX_BATCH_SIZE];
+            int count = 0;
+#ifdef _WIN32
+            WaitForSingleObject(list_mutex, INFINITE);
+#else
+            pthread_mutex_lock(&list_mutex);
+#endif
+            while (count < req) {
+                id_t tmp;
+                if (!list_remove_head(id_list, &tmp)) break;
+                ids_local[count++] = tmp;
+            }
+#ifdef _WIN32
+            ReleaseMutex(list_mutex);
+#else
+            pthread_mutex_unlock(&list_mutex);
+#endif
+            if (count == 0) {
+                send(client_socket, RESP_EMPTY, (int)strlen(RESP_EMPTY), 0);
+                break;
+            } else {
+                char outbuf[32768]; // Larger buffer for bigger batches
+                int offset = snprintf(outbuf, sizeof(outbuf), "%d", count);
+                for (int i = 0; i < count && offset < (int)sizeof(outbuf) - 32; ++i) {
+                    offset += snprintf(outbuf + offset, sizeof(outbuf) - offset, " %lld", (long long)ids_local[i]);
+                }
+                if (offset < (int)sizeof(outbuf) - 2) {
+                    outbuf[offset++] = '\n';
+                }
+                send(client_socket, outbuf, offset, 0);
+            }
+        } else if (strcmp(buffer, "GET") == 0) {
 #ifdef _WIN32
             WaitForSingleObject(list_mutex, INFINITE);
 #else
@@ -60,10 +108,10 @@ void* handle_client(void* client_socket_ptr) {
 
             if (success) {
                 char response[64];
-                snprintf(response, sizeof(response), "%lld", id);
-                send(client_socket, response, strlen(response), 0);
+                int len = snprintf(response, sizeof(response), "%lld\n", id); // Added newline
+                send(client_socket, response, len, 0);
             } else {
-                send(client_socket, "EMPTY", 5, 0);
+                send(client_socket, RESP_EMPTY, (int)strlen(RESP_EMPTY), 0);
                 break;
             }
         }
@@ -121,6 +169,19 @@ int main(int argc, char *argv[]) {
     int client_len = sizeof(client_addr);
 
     server_socket = socket(AF_INET, SOCK_STREAM, 0);
+    
+    // Socket optimizations for better performance
+    {
+        int one = 1;
+        int buf = SOCKET_BUFFER_SIZE;
+        setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, (char*)&one, sizeof(one));
+        setsockopt(server_socket, SOL_SOCKET, SO_SNDBUF, (char*)&buf, sizeof(buf));
+        setsockopt(server_socket, SOL_SOCKET, SO_RCVBUF, (char*)&buf, sizeof(buf));
+#ifdef _WIN32
+        setsockopt(server_socket, IPPROTO_TCP, TCP_NODELAY, (char*)&one, sizeof(one));
+#endif
+    }
+    
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons(port);
@@ -134,7 +195,7 @@ int main(int argc, char *argv[]) {
     listen(server_socket, MAX_CLIENTS);
     printf("[SERVER] Waiting for connections on port %d...\n", port);
 
-    while ((client_socket = accept(server_socket, (struct sockaddr*)&server_addr, &client_len))) {
+    while ((client_socket = accept(server_socket, (struct sockaddr*)&client_addr, &client_len))) { // Fixed: use client_addr
         printf("[SERVER] Connection accepted.\n");
         SOCKET* new_sock = malloc(sizeof(SOCKET));
         *new_sock = client_socket;
