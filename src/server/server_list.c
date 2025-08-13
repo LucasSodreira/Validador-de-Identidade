@@ -4,7 +4,7 @@
 #include <time.h>
 #include "utils.h"
 #include "linked_list.h"
-#include "protocol.h"
+#include "../protocol.h"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -18,8 +18,7 @@
 #endif
 
 #define MAX_CLIENTS 10
-#define SOCKET_BUFFER_SIZE (1 << 20)  // 1 MiB buffer
-#define MAX_BATCH_SIZE 4096           // Increased batch size for better performance
+#define SOCKET_BUFFER_SIZE (1 << 20)  // 1 MiB buffer (não usado para alinhar ao server_queue)
 
 LinkedList* id_list = NULL;
 
@@ -36,85 +35,92 @@ void* handle_client(void* client_socket_ptr) {
 #endif
     SOCKET client_socket = *(SOCKET*)client_socket_ptr;
     free(client_socket_ptr);
-    char buffer[1024];
+    char buffer[2048];
+    size_t pending = 0;
     id_t id;
 
     while (1) {
-        int read_size = recv(client_socket, buffer, sizeof(buffer) - 1, 0);
+        int read_size = recv(client_socket, buffer + pending, sizeof(buffer) - 1 - (int)pending, 0);
         if (read_size <= 0) {
-            printf("[SERVER] Client disconnected.\n");
+            printf("[SERVIDOR] Cliente desconectado.\n");
             break;
         }
-        buffer[read_size] = '\0';
-        
-        // Normalize CRLF for robust parsing
-        char *cr = strchr(buffer, '\r'); 
-        if (cr) *cr = '\0';
-        char *lf = strchr(buffer, '\n'); 
-        if (lf) *lf = '\0';
+        int total = (int)pending + read_size;
+        buffer[total] = '\0';
 
-        if (strncmp(buffer, "GETB", 4) == 0) {
-            // Format: GETB <n>
-            long req = 0;
-            char *p = buffer + 4;
-            while (*p == ' ') p++;
-            if (*p) req = strtoll(p, NULL, 10);
-            if (req <= 0) req = 1;
-            if (req > MAX_BATCH_SIZE) req = MAX_BATCH_SIZE; // Increased limit
+        char *start = buffer;
+        char *nl;
+        while ((nl = strchr(start, '\n')) != NULL) {
+            *nl = '\0';
+            char *line = start;
+            char *cr = strchr(line, '\r'); if (cr) *cr = '\0';
 
-            id_t ids_local[MAX_BATCH_SIZE];
-            int count = 0;
+            log_request("SERVER_LIST RECV: %s", line);
+
+            if (strncmp(line, CMD_GETB, strlen(CMD_GETB)) == 0) {
+                long req = 0;
+                char *p = line + strlen(CMD_GETB);
+                while (*p == ' ') p++;
+                if (*p) req = strtoll(p, NULL, 10);
+                if (req <= 0) req = 1;
+                if (req > MAX_BATCH_SIZE) req = MAX_BATCH_SIZE;
+
+                id_t ids_local[MAX_BATCH_SIZE];
+                int count = 0;
 #ifdef _WIN32
-            WaitForSingleObject(list_mutex, INFINITE);
+                WaitForSingleObject(list_mutex, INFINITE);
 #else
-            pthread_mutex_lock(&list_mutex);
+                pthread_mutex_lock(&list_mutex);
 #endif
-            while (count < req) {
-                id_t tmp;
-                if (!list_remove_head(id_list, &tmp)) break;
-                ids_local[count++] = tmp;
-            }
-#ifdef _WIN32
-            ReleaseMutex(list_mutex);
-#else
-            pthread_mutex_unlock(&list_mutex);
-#endif
-            if (count == 0) {
-                send(client_socket, RESP_EMPTY, (int)strlen(RESP_EMPTY), 0);
-                break;
-            } else {
-                char outbuf[32768]; // Larger buffer for bigger batches
-                int offset = snprintf(outbuf, sizeof(outbuf), "%d", count);
-                for (int i = 0; i < count && offset < (int)sizeof(outbuf) - 32; ++i) {
-                    offset += snprintf(outbuf + offset, sizeof(outbuf) - offset, " %lld", (long long)ids_local[i]);
+                while (count < req) {
+                    id_t tmp;
+                    if (!list_remove_head(id_list, &tmp)) break;
+                    ids_local[count++] = tmp;
                 }
-                if (offset < (int)sizeof(outbuf) - 2) {
-                    outbuf[offset++] = '\n';
+#ifdef _WIN32
+                ReleaseMutex(list_mutex);
+#else
+                pthread_mutex_unlock(&list_mutex);
+#endif
+                if (count == 0) {
+                    log_response("SERVER_LIST SEND: %s", RESP_EMPTY);
+                    send(client_socket, RESP_EMPTY, (int)strlen(RESP_EMPTY), 0);
+                } else {
+                    char outbuf[8192];
+                    int offset = snprintf(outbuf, sizeof(outbuf), "%d", count);
+                    for (int i = 0; i < count && offset < (int)sizeof(outbuf); ++i) {
+                        offset += snprintf(outbuf + offset, sizeof(outbuf) - offset, " %lld", (long long)ids_local[i]);
+                    }
+                    if (offset < (int)sizeof(outbuf) - 2) outbuf[offset++] = '\n';
+                    log_response("SERVER_LIST SEND: %.*s", offset, outbuf);
+                    send(client_socket, outbuf, offset, 0);
                 }
-                send(client_socket, outbuf, offset, 0);
-            }
-        } else if (strcmp(buffer, "GET") == 0) {
+            } else if (strcmp(line, CMD_GET) == 0) {
 #ifdef _WIN32
-            WaitForSingleObject(list_mutex, INFINITE);
+                WaitForSingleObject(list_mutex, INFINITE);
 #else
-            pthread_mutex_lock(&list_mutex);
+                pthread_mutex_lock(&list_mutex);
 #endif
-            int success = list_remove_head(id_list, &id);
+                int success = list_remove_head(id_list, &id);
 #ifdef _WIN32
-            ReleaseMutex(list_mutex);
+                ReleaseMutex(list_mutex);
 #else
-            pthread_mutex_unlock(&list_mutex);
+                pthread_mutex_unlock(&list_mutex);
 #endif
-
-            if (success) {
-                char response[64];
-                int len = snprintf(response, sizeof(response), "%lld\n", id); // Added newline
-                send(client_socket, response, len, 0);
-            } else {
-                send(client_socket, RESP_EMPTY, (int)strlen(RESP_EMPTY), 0);
-                break;
+                if (success) {
+                    char response[64];
+                    int len = snprintf(response, sizeof(response), "%lld\n", id);
+                    send(client_socket, response, len, 0);
+                    log_response("SERVER_LIST SEND: %.*s", len, response);
+                } else {
+                    send(client_socket, RESP_EMPTY, (int)strlen(RESP_EMPTY), 0);
+                    log_response(RESP_EMPTY);
+                }
             }
+            start = nl + 1;
         }
+        pending = (size_t)(buffer + total - start);
+        if (pending > 0 && start != buffer) memmove(buffer, start, pending);
     }
 
     close(client_socket);
@@ -134,6 +140,9 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Usage: %s <port> <num_ids>\n", argv[0]);
         exit(EXIT_FAILURE);
     }
+
+    // Inicializa sistema de log
+    init_logging("server_request.txt", "server_responses.txt");
 
     int port = atoi(argv[1]);
     long long num_ids = atoll(argv[2]);
@@ -170,17 +179,7 @@ int main(int argc, char *argv[]) {
 
     server_socket = socket(AF_INET, SOCK_STREAM, 0);
     
-    // Socket optimizations for better performance
-    {
-        int one = 1;
-        int buf = SOCKET_BUFFER_SIZE;
-        setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, (char*)&one, sizeof(one));
-        setsockopt(server_socket, SOL_SOCKET, SO_SNDBUF, (char*)&buf, sizeof(buf));
-        setsockopt(server_socket, SOL_SOCKET, SO_RCVBUF, (char*)&buf, sizeof(buf));
-#ifdef _WIN32
-        setsockopt(server_socket, IPPROTO_TCP, TCP_NODELAY, (char*)&one, sizeof(one));
-#endif
-    }
+    // Mantido simples para alinhar ao server_queue
     
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
@@ -221,5 +220,8 @@ int main(int argc, char *argv[]) {
     CloseHandle(list_mutex);
     WSACleanup();
 #endif
+    
+    // Fecha sistema de log
+    close_logging();
     return 0;
 }

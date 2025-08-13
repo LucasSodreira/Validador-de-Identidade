@@ -45,4 +45,36 @@ double get_time();
  */
 void shuffle(id_t *array, size_t n);
 
+/**
+ * @brief Inicializa o sistema de logging
+ *
+ * Cria os arquivos request.txt e responses.txt para logging thread-safe
+ *
+ * @param requests_path Caminho para o arquivo de requests (NULL usa "request.txt")
+ * @param responses_path Caminho para o arquivo de responses (NULL usa "responses.txt")
+ * @return 0 se bem-sucedido, -1 em caso de erro
+ */
+int init_logging(const char* requests_path, const char* responses_path);
+
+/**
+ * @brief Finaliza o sistema de logging e fecha os arquivos
+ */
+void close_logging(void);
+
+/**
+ * @brief Registra uma requisição no arquivo request.txt
+ *
+ * @param fmt String de formato (como printf)
+ * @param ... Argumentos variáveis
+ */
+void log_request(const char* fmt, ...);
+
+/**
+ * @brief Registra uma resposta no arquivo responses.txt
+ *
+ * @param fmt String de formato (como printf)
+ * @param ... Argumentos variáveis
+ */
+void log_response(const char* fmt, ...);
+
 #endif // UTILS_H

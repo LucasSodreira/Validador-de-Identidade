@@ -114,9 +114,9 @@ O projeto implementa um protocolo simples baseado em texto:
 - `GETB <n>`: Solicita até `n` IDs em lote (mais eficiente)
 
 ### Respostas do Servidor
-- `<id>`: ID único (long long)
-- `<count> <id1> <id2> ... <idN>`: Resposta em lote
-- `EMPTY`: Não há mais IDs disponíveis
+- `<id>\n`: ID único (long long, termina com newline)
+- `<count> <id1> <id2> ... <idN>\n`: Resposta em lote (termina com newline)
+- `EMPTY\n`: Não há mais IDs disponíveis
 
 ### Exemplo de Comunicação
 ```
@@ -153,13 +153,6 @@ Servidor -> Cliente: 3 12346 12347 12348
 4. **Otimizações de compilação**: LTO e `-march=native` no modo release
 5. **Multiplataforma**: Suporte para Windows e Linux/Unix
 
-### Recomendações Futuras
-1. **Estruturas contíguas**: Usar array + índice em vez de listas encadeadas para melhor cache locality
-2. **Protocolo binário**: Enviar dados em formato binário em vez de texto
-3. **Pool de threads**: Pré-criar threads em vez de criar/destruir para cada cliente
-4. **Compressão**: Delta encoding para IDs sequenciais
-5. **Benchmark detalhado**: Usar ferramentas como `perf` (Linux) ou ETW (Windows)
-## Dependências e Requisitos
 
 ### Sistema Operacional
 - **Windows**: MinGW-w64 ou Visual Studio
@@ -210,3 +203,8 @@ taskkill /f /im server_list.exe
 - **Lista**: ~3-4 segundos
 
 *Resultados podem variar conforme hardware e configuração de rede.*
+
+## Limites e compatibilidade
+
+- Lotes: o servidor impõe limite de `MAX_BATCH_SIZE` por resposta (atualmente 1024, ver `src/protocol.h`). Ajuste cliente/servidor em conjunto se alterar.
+- Newlines: todas as variantes de servidor agora terminam respostas com `\n` para consistência.

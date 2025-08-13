@@ -31,10 +31,10 @@ OBJS_LIST  = $(SRCS_LIST:.c=.o) src/common/utils.o
 OBJS_CLIENT = $(SRCS_CLIENT:.c=.o) src/common/utils.o
 
 # Targets principais
-.PHONY: all debug release clean format
+.PHONY: all debug release clean format stop logs-clean rebuild
 
-# Target padrão - compila em modo release
-all: release
+# Target padrão - para, limpa e compila (release)
+all: rebuild
 
 # Modo debug - sem otimizações, com símbolos de debug
 debug: CFLAGS = $(COMMON_CFLAGS) $(OPT_DEBUG) $(INCLUDES)
@@ -69,3 +69,18 @@ $(BIN_DIR):
 clean:
 	del /q src\common\*.o src\server\*.o src\client\*.o 2>nul
 	del /q bin\server_queue.exe bin\server_stack.exe bin\server_list.exe bin\client.exe 2>nul
+
+# Encerra binários em execução (ignora erro se não estiverem rodando)
+stop:
+	-@taskkill /f /im server_queue.exe 2>nul
+	-@taskkill /f /im server_stack.exe 2>nul
+	-@taskkill /f /im server_list.exe 2>nul
+	-@taskkill /f /im client.exe 2>nul
+
+# Limpa os arquivos de log mais comuns (raiz e bin/)
+logs-clean:
+	-@del /q responses.txt request.txt client_responses.txt client_request.txt server_responses.txt server_request.txt 2>nul
+	-@del /q bin\*.txt 2>nul
+
+# Para tudo, limpa objetos/execs e recompila em release
+rebuild: stop clean release

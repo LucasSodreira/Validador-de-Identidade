@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "utils.h"
-#include "protocol.h"
+#include "../include/protocol.h"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -23,6 +23,9 @@ int main(int argc, char *argv[]) {
     }
 #endif
 
+    // Inicializa logging (arquivos dedicados ao cliente para evitar interleaving entre processos)
+    init_logging("client_request.txt", "client_responses.txt");
+
     if (argc < 4 || argc > 5) {
         fprintf(stderr, "Usage: %s <ip_address> <port> <num_ids> [batch]\n", argv[0]);
         exit(EXIT_FAILURE);
@@ -39,7 +42,9 @@ int main(int argc, char *argv[]) {
 
     SOCKET sock;
     struct sockaddr_in server_addr;
-    char buffer[1024];
+    // Buffer de recepção com acumulação por linha
+    char rbuf[65536];
+    size_t rlen = 0;
 
     sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock == INVALID_SOCKET) {
@@ -68,33 +73,52 @@ int main(int argc, char *argv[]) {
     long long received = 0;
     while (received < num_ids_to_request) {
         if (batch == 1) {
-            if (send(sock, "GET", 3, 0) < 0) { perror("Send failed"); break; }
+            log_request("CLIENT SEND: GET");
+            const char *msg = "GET\n";
+            if (send(sock, msg, (int)strlen(msg), 0) < 0) { perror("Send failed"); break; }
         } else {
             char cmd[64];
-            int len = snprintf(cmd, sizeof(cmd), "GETB %lld", (num_ids_to_request - received) < batch ? (num_ids_to_request - received) : batch);
+            int len = snprintf(cmd, sizeof(cmd), "GETB %lld\n", (num_ids_to_request - received) < batch ? (num_ids_to_request - received) : batch);
+            log_request("CLIENT SEND: %.*s", len - 1, cmd); // log sem o \n
             if (send(sock, cmd, len, 0) < 0) { perror("Send failed"); break; }
         }
-        int read_size = recv(sock, buffer, sizeof(buffer) - 1, 0);
-        if (read_size <= 0) { printf("[CLIENT] Server disconnected or error.\n"); break; }
-        buffer[read_size] = '\0';
-        // Normalizar linha
-        char *cr = strchr(buffer, '\r'); if (cr) *cr='\0';
-        char *lf = strchr(buffer, '\n'); if (lf) *lf='\0';
+        // Ler uma linha completa de resposta (até '\n')
+        char *nl = NULL;
+        while ((nl = memchr(rbuf, '\n', rlen)) == NULL) {
+            int n = recv(sock, rbuf + rlen, (int)sizeof(rbuf) - 1 - (int)rlen, 0);
+            if (n <= 0) { printf("[CLIENT] Server disconnected or error.\n"); goto done; }
+            rlen += (size_t)n;
+            rbuf[rlen] = '\0';
+        }
 
-        if (strcmp(buffer, "EMPTY") == 0) { printf("[CLIENT] Server has no more IDs.\n"); break; }
+        // Extrai a linha
+        size_t linelen = (size_t)(nl - rbuf);
+        char line[65536];
+        if (linelen >= sizeof(line)) linelen = sizeof(line) - 1;
+        memcpy(line, rbuf, linelen);
+        line[linelen] = '\0';
+        // Avança o buffer remanescente
+        size_t rem = rlen - (linelen + 1);
+        memmove(rbuf, nl + 1, rem);
+        rlen = rem;
+
+        // Normaliza CR
+        char *cr = strchr(line, '\r'); if (cr) *cr = '\0';
+
+        // Log da resposta completa
+        log_response("CLIENT RECV: %s", line);
+
+        if (strcmp(line, "EMPTY") == 0) { printf("[CLIENT] Server has no more IDs.\n"); break; }
 
         if (batch == 1) {
+            // Resposta unitária já foi consumida (uma linha). Nenhuma ação extra.
             received++;
         } else {
             // Primeiro número é a contagem
-            char *p = buffer;
+            char *p = line;
             long count = strtol(p, &p, 10);
             if (count <= 0) break;
-            // Consumir ids (não armazenamos)
-            for (long i = 0; i < count; ++i) {
-                long long idv = strtoll(p, &p, 10);
-                (void)idv;
-            }
+            // Não precisamos consumir os IDs aqui (benchmark), pois a linha já foi integralmente consumida
             received += count;
         }
     }
@@ -104,9 +128,11 @@ int main(int argc, char *argv[]) {
     printf("[CLIENT] Received %lld/%lld IDs.\n", received, num_ids_to_request);
     printf("[CLIENT] Total time taken: %.3f seconds.\n", end_time - start_time);
 
+done:
     close(sock);
 #ifdef _WIN32
     WSACleanup();
 #endif
+    close_logging();
     return 0;
 }

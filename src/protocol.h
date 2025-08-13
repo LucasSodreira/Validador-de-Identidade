@@ -6,4 +6,7 @@
 #define CMD_GETB "GETB"
 #define RESP_EMPTY "EMPTY\n"
 
+// Maximum number of IDs per batch response
+#define MAX_BATCH_SIZE 1024
+
 #endif // PROTOCOL_H
